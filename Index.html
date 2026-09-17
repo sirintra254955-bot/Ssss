@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>AR Fruit Catcher Game</title>
+    <!-- โหลดไลบรารี p5.js, MediaPipe Pose และ ml5.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/addons/p5.sound.min.js"></script>
+    <script src="https://unpkg.com/ml5@latest/dist/ml5.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #111;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Sarabun', sans-serif;
+        }
+        h2 { margin: 10px 0; }
+        #canvas-container {
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>🍎 AR Fruit Catch Challenge 💣</h2>
+    <div id="canvas-container"></div>
+
+    <script>
+        let video;
+        let poseNet;
+        let poses = [];
+        let items = [];
+        
+        let score = 0;
+        let timeLeft = 60; // 1 นาที
+        let gameStarted = false;
+        let gameOver = false;
+        let timerInterval;
+
+        function setup() {
+            let canvas = createCanvas(640, 480);
+            canvas.parent('canvas-container');
+
+            // เปิดใช้งานกล้องเว็บแคม
+            video = createCapture(VIDEO);
+            video.size(width, height);
+            video.hide();
+
+            // เริ่มต้นใช้งาน PoseNet จาก ml5.js
+            poseNet = ml5.poseNet(video, modelReady);
+            poseNet.on('pose', function(results) {
+                poses = results;
+            });
+        }
+
+        function modelReady() {
+            console.log('Model Loaded!');
+            startTimer();
+            gameStarted = true;
+        }
+
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                if (timeLeft > 0) {
+                    timeLeft--;
+                } else {
+                    clearInterval(timerInterval);
+                    gameOver = true;
+                }
+            }, 1000);
+        }
+
+        function draw() {
+            background(0);
+
+            // พลิกด้านวิดีโอและแสดงผล (กระจกเงา)
+            push();
+            translate(width, 0);
+            scale(-1, 1);
+            image(video, 0, 0, width, height);
+            
+            // วาดโครงกระดูก (Skeleton) หากตรวจจับเจอท่าทาง
+            if (gameStarted && !gameOver) {
+                drawSkeleton();
+                handleItems();
+            }
+            pop();
+
+            // แสดง UI คะแนนและเวลา (ไม่ให้ถูกพลิกตามกล้อง)
+            drawUI();
+
+            // หน้าจอจบเกม
+            if (gameOver) {
+                drawGameOverScreen();
+            }
+        }
+
+        // ฟังก์ชันจัดการและวาดไอเทม (ผลไม้ / ระเบิด)
+        function handleItems() {
+            // สุ่มสร้างไอเทมใหม่
+            if (frameCount % 40 === 0 && !gameOver) {
+                let type = random() > 0.3 ? 'fruit' : 'bomb';
+                items.push({
+                    x: random(50, width - 50),
+                    y: -20,
+                    speed: random(3, 6),
+                    type: type,
+                    size: 30
+                });
+            }
+
+            // วาดและอัปเดตตำแหน่งไอเทม
+            for (let i = items.length - 1; i >= 0; i--) {
+                let item = items[i];
+                item.y += item.speed;
+
+                // วาดวัตถุลงบนจอ
+                noStroke();
+                if (item.type === 'fruit') {
+                    fill(0, 255, 0); // ผลไม้สีเขียว
+                    ellipse(item.x, item.y, item.size);
+                } else {
+                    fill(255, 0, 0); // ระเบิดสีแดง
+                    rect(item.x - 15, item.y - 15, item.size, item.size);
+                }
+
+                // ตรวจจับการชนกับมือของผู้เล่น (ใช้ตำแหน่งข้อมือซ้ายและขวา)
+                if (poses.length > 0) {
+                    let pose = poses[0].pose;
+                    let leftWrist = pose.leftWrist;
+                    let rightWrist = pose.rightWrist;
+
+                    // เช็คข้อมือซ้าย
+                    if (dist(item.x, item.y, leftWrist.x, leftWrist.y) < item.size + 10) {
+                        applyScore(item.type);
+                        items.splice(i, 1);
+                        continue;
+                    }
+                    // เช็คข้อมือขวา
+                    else if (dist(item.x, item.y, rightWrist.x, rightWrist.y) < item.size + 10) {
+                        applyScore(item.type);
+                        items.splice(i, 1);
+                        continue;
+                    }
+                }
+
+                // ลบไอเทมเมื่อตกหลุดจอ
+                if (item.y > height) {
+                    items.splice(i, 1);
+                }
+            }
+        }
+
+        // คำนวณคะแนน
+        function applyScore(type) {
+            if (type === 'fruit') {
+                score += 10;
+            } else {
+                score -= 15;
+                if (score < 0) score = 0;
+            }
+        }
+
+        // วาดเส้นโครงกระดูกร่างกาย
+        function drawSkeleton() {
+            if (poses.length > 0) {
+                let pose = poses[0].pose;
+
+                // วาดจุดข้อต่อ (Keypoints)
+                for (let j = 0; j < pose.keypoints.length; j++) {
+                    let keypoint = pose.keypoints[j];
+                    if (keypoint.score > 0.2) {
+                        fill(0, 255, 255);
+                        noStroke();
+                        ellipse(keypoint.position.x, keypoint.position.y, 10, 10);
+                    }
+                }
+
+                // วาดเส้นโครงกระดูกเชื่อมต่อ (Skeleton Bones)
+                let skeleton = poses[0].skeleton;
+                for (let j = 0; j < skeleton.length; j++) {
+                    let partA = skeleton[j][0];
+                    let partB = skeleton[j][1];
+                    stroke(0, 255, 255);
+                    strokeWeight(3);
+                    line(partA.position.x, partA.position.y, partB.position.x, partB.position.y);
+                }
+            }
+        }
+
+        // แสดงผลคะแนนและเวลาบนจอ
+        function drawUI() {
+            fill(255);
+            textSize(20);
+            text(`คะแนน: ${score}`, 20, 35);
+            text(`เวลา: ${timeLeft} วินาที`, width - 140, 35);
+        }
+
+        // หน้าจอสรุปผลเมื่อหมดเวลา
+        function drawGameOverScreen() {
+            push();
+            fill(0, 0, 0, 200);
+            rect(0, 0, width, height);
+            
+            fill(255);
+            textSize(32);
+            textAlign(CENTER, CENTER);
+            text("หมดเวลา!", width / 2, height / 2 - 40);
+            textSize(24);
+            text(`คะแนนที่คุณทำได้: ${score} แต้ม`, width / 2, height / 2 + 10);
+            textSize(16);
+            text("รีเฟรชหน้าเว็บเพื่อเล่นใหม่อีกครั้ง", width / 2, height / 2 + 60);
+            pop();
+        }
+    </script>
+</body>
+</html>ที
